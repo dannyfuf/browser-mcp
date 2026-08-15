@@ -16,6 +16,7 @@
     "npm:@biomejs/biome@*": "2.5.8",
     "npm:@biomejs/biome@^2.4.14": "2.5.8",
     "npm:@modelcontextprotocol/sdk@^1.29.0": "1.29.0_zod@3.25.76",
+    "npm:@puppeteer/browsers@*": "2.13.2",
     "npm:puppeteer@^24.43.0": "24.43.1_typescript@6.0.3",
     "npm:typescript@^6.0.3": "6.0.3",
     "npm:zod@3": "3.25.76"
