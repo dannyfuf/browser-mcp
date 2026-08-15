@@ -1,6 +1,7 @@
 import puppeteer, { type Browser, type HTTPRequest, type HTTPResponse, type Page } from 'puppeteer';
 import { computeLaunchOptions } from './launch-args.ts';
 import { logger } from './logger.ts';
+import { finalizeAllRecordings, finalizeRecording } from './recording.ts';
 
 export interface ConsoleEntry {
   ts: number;
@@ -50,7 +51,7 @@ class BrowserSession {
   private tabs = new Map<string, TabRecord>();
   private currentTargetId: string | null = null;
   private nextId = 1;
-  private shuttingDown = false;
+  private closing: Promise<void> | null = null;
 
   async ensureBrowser(): Promise<Browser> {
     if (this.browser?.connected) return this.browser;
@@ -119,6 +120,7 @@ class BrowserSession {
       throw new Error('no current tab to close');
     }
     const rec = this.requireTab(tabId);
+    await finalizeRecording(rec.targetId);
     await rec.page.close().catch(() => undefined);
     this.removeTab(rec.targetId);
     if (this.tabs.size === 0) {
@@ -158,8 +160,21 @@ class BrowserSession {
   }
 
   async close(): Promise<void> {
-    if (this.shuttingDown) return;
-    this.shuttingDown = true;
+    if (this.closing) return this.closing;
+    this.closing = this.performClose().finally(() => {
+      this.closing = null;
+    });
+    return this.closing;
+  }
+
+  private async performClose(): Promise<void> {
+    let recordingError: unknown;
+    try {
+      await finalizeAllRecordings();
+    } catch (err) {
+      recordingError = err;
+      logger.error('recording finalization error', String(err));
+    }
     const browser = this.browser;
     this.browser = null;
     this.tabs.clear();
@@ -168,7 +183,7 @@ class BrowserSession {
       logger.info('closing browser');
       await browser.close().catch((err) => logger.warn('browser close error', String(err)));
     }
-    this.shuttingDown = false;
+    if (recordingError) throw recordingError;
   }
 
   // ---------- internals ----------
@@ -309,18 +324,29 @@ function browserTargetId(target: unknown): string {
 export const session = new BrowserSession();
 
 let signalsAttached = false;
+let shutdownStarted = false;
 export function attachShutdownHandlers(): void {
   if (signalsAttached) return;
   signalsAttached = true;
-  const shutdown = (signal: string) => {
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
     logger.info(`shutdown signal: ${signal}`);
-    session
-      .close()
-      .catch((err) => logger.error('shutdown error', String(err)))
-      .finally(() => process.exit(0));
+    try {
+      await finalizeAllRecordings({ assemble: false });
+    } catch (err) {
+      logger.error('shutdown error', String(err));
+    }
+    try {
+      await session.close();
+    } catch (err) {
+      logger.error('browser shutdown error', String(err));
+    } finally {
+      process.exit(0);
+    }
   };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  Deno.addSignalListener('SIGINT', () => void shutdown('SIGINT'));
+  Deno.addSignalListener('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('beforeExit', () => {
     session.close().catch((err: unknown) => logger.error('beforeExit close error', String(err)));
   });
