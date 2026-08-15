@@ -1,4 +1,6 @@
 import { Buffer } from 'node:buffer';
+import { readdir, rm, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 export interface SmokeOptions {
   env?: Record<string, string | undefined>;
@@ -22,7 +24,7 @@ interface JsonRpcResponse {
 }
 
 interface ToolCallResult {
-  content?: Array<{ type?: string; data?: string; mimeType?: string }>;
+  content?: Array<{ type?: string; data?: string; mimeType?: string; text?: string }>;
   isError?: boolean;
 }
 
@@ -36,9 +38,12 @@ export async function runSmoke(
   if (command.length === 0) throw new Error('smoke command must not be empty');
 
   const fixture = startFixtureServer();
+  const temporaryArtifactDir = opts.env?.BROWSER_ARTIFACT_DIR === undefined;
+  const artifactDir =
+    opts.env?.BROWSER_ARTIFACT_DIR ?? (await Deno.makeTempDir({ prefix: 'browser-mcp-smoke-' }));
   const child = new Deno.Command(command[0], {
     args: command.slice(1),
-    env: childEnvironment(opts.env),
+    env: childEnvironment({ ...opts.env, BROWSER_ARTIFACT_DIR: artifactDir }),
     stdin: 'piped',
     stdout: 'piped',
     stderr: 'piped',
@@ -84,7 +89,21 @@ export async function runSmoke(
 
     const results: SmokeToolResult[] = [];
     results.push(await callTool({ name: 'browser_new_tab' }));
+    results.push(await callTool({ name: 'browser_start_recording' }));
     results.push(await callTool({ name: 'browser_navigate', arguments: { url: fixture.url } }));
+    results.push(await callTool({ name: 'browser_click', arguments: { selector: '#interact' } }));
+    results.push(
+      await callTool({
+        name: 'browser_evaluate',
+        arguments: {
+          expression:
+            'new Promise((resolve) => setTimeout(() => resolve(document.querySelector("#fixture")?.textContent), 500))',
+        },
+      }),
+    );
+    const recording = await callTool({ name: 'browser_stop_recording' });
+    await assertRecordingArtifact(recording.result as ToolCallResult);
+    results.push(recording);
     const screenshot = await callTool({ name: 'browser_screenshot' });
     assertPng(screenshot.result as ToolCallResult);
     results.push(screenshot);
@@ -95,6 +114,7 @@ export async function runSmoke(
     await writer.close().catch(() => {});
     await stopChild(child, opts.timeoutMs ?? 10_000);
     await Promise.allSettled([stdoutDone, stderrDone]);
+    if (temporaryArtifactDir) await rm(artifactDir, { recursive: true, force: true });
   }
 }
 
@@ -134,7 +154,13 @@ function startFixtureServer(): { url: string; stop: () => Promise<void> } {
     { hostname: '127.0.0.1', port: 0, onListen: () => {} },
     () =>
       new Response(
-        '<!doctype html><html><body><h1 id="fixture">browser-mcp smoke</h1></body></html>',
+        `<!doctype html><html><head><style>
+          #fixture { animation: pulse 0.2s linear infinite alternate; }
+          @keyframes pulse { to { transform: translateX(40px); color: rebeccapurple; } }
+        </style></head><body>
+          <h1 id="fixture">browser-mcp smoke</h1>
+          <button id="interact" onclick="document.querySelector('#fixture').textContent = 'recorded interaction'">Interact</button>
+        </body></html>`,
         { headers: { 'content-type': 'text/html; charset=utf-8' } },
       ),
   );
@@ -143,6 +169,34 @@ function startFixtureServer(): { url: string; stop: () => Promise<void> } {
     url: `http://${address.hostname}:${address.port}/fixture`,
     stop: () => server.shutdown(),
   };
+}
+
+async function assertRecordingArtifact(result: ToolCallResult): Promise<void> {
+  const webmPath = result.content
+    ?.find((item) => item.text?.startsWith('WebM path: '))
+    ?.text?.slice('WebM path: '.length);
+  const framesDir = result.content
+    ?.find((item) => item.text?.startsWith('Frames directory: '))
+    ?.text?.slice('Frames directory: '.length);
+  const recordingDir = webmPath ? dirname(webmPath) : framesDir;
+  if (!recordingDir) throw new Error('browser_stop_recording returned no artifact path');
+
+  const metadata = await Promise.all([
+    stat(join(recordingDir, 'frames.ndjson')),
+    stat(join(recordingDir, 'recording.json')),
+  ]);
+  if (metadata.some((entry) => !entry.isFile() || entry.size === 0)) {
+    throw new Error('recording metadata artifacts were empty');
+  }
+
+  if (webmPath) {
+    const webm = await stat(webmPath);
+    if (!webm.isFile() || webm.size === 0) throw new Error('recording WebM artifact was empty');
+    return;
+  }
+
+  const frames = (await readdir(recordingDir)).filter((name) => /^frame-\d+\.jpg$/.test(name));
+  if (frames.length === 0) throw new Error('recording fallback produced no JPEG frame artifacts');
 }
 
 async function captureResponses(

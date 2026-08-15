@@ -79,7 +79,9 @@ archive incompletely extracted. On macOS arm64, if the binary is absent, re-extr
 ## Deno bundle smoke
 
 The reusable harness accepts any stdio MCP server command. It initializes the server, opens a tab,
-navigates to a local fixture, verifies a non-empty base64 PNG screenshot, and closes the tab:
+records a local animated fixture through a navigation and interaction, asserts the WebM (or
+no-ffmpeg JPEG fallback) plus metadata exist, verifies a non-empty base64 PNG screenshot, and
+closes the tab:
 
 ```sh
 BROWSER_HEADLESS=1 deno run -A smoke/harness.ts deno run -A dist/browser-mcp.js

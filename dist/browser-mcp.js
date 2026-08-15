@@ -327219,9 +327219,9 @@ function normalizeExtension(extension2) {
 // src/recording.ts
 var DEFAULT_MAX_DURATION_S = 120;
 var MAX_DURATION_S = 300;
-var DEFAULT_QUALITY = 60;
+var DEFAULT_QUALITY = 50;
 var DEFAULT_MAX_WIDTH = 1280;
-var DEFAULT_EVERY_NTH_FRAME = 2;
+var DEFAULT_EVERY_NTH_FRAME = 6;
 var DEFAULT_FRAME_DURATION_S = 1 / 30;
 var activeRecordings = /* @__PURE__ */ new Map();
 async function startRecording(page, targetId, opts) {
