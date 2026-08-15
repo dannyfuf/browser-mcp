@@ -63,9 +63,9 @@ interface AssemblyResult {
 
 const DEFAULT_MAX_DURATION_S = 120;
 const MAX_DURATION_S = 300;
-const DEFAULT_QUALITY = 60;
+const DEFAULT_QUALITY = 50;
 const DEFAULT_MAX_WIDTH = 1280;
-const DEFAULT_EVERY_NTH_FRAME = 2;
+const DEFAULT_EVERY_NTH_FRAME = 6;
 const DEFAULT_FRAME_DURATION_S = 1 / 30;
 
 const activeRecordings = new Map<string, RecordingRuntime>();

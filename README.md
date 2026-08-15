@@ -203,7 +203,7 @@ All tools take JSON args. Errors return as `isError: true` content blocks.
 - `browser_start_recording({ tab?, max_duration_s?, quality?, max_width? })` — starts a raw CDP screencast and returns its session id and frame directory
 - `browser_stop_recording()` — stops the current tab's recording and returns a WebM path, or a recoverable frames directory when assembly is skipped
 
-Recording defaults are 120 seconds, JPEG quality 60, maximum width 1280, and every second CDP
+Recording defaults are 120 seconds, JPEG quality 50, maximum width 1280, and every sixth CDP
 frame; `max_duration_s` is capped at 300. Frames are written immediately as `frame-<n>.jpg`
 alongside monotonic timestamps in `frames.ndjson`, so frame bytes are never accumulated in memory.
 When ffmpeg succeeds, the JPEGs are deleted and the WebM byte size is returned. When ffmpeg is
@@ -222,8 +222,41 @@ browser_stop_recording()
 ```
 
 Use the returned WebM path when assembly succeeds; otherwise retain or upload the returned frames
-directory. To exercise the same flow visibly on macOS, run `deno task dev` with no browser env
-vars, call the tools above from an MCP client, then open the returned WebM.
+directory.
+
+### Recording resource budget
+
+Measured on 2026-08-15 on macOS 26.3 arm64 (Apple M5 Pro, 24 GiB) using Chrome for Testing
+148.0.7778.97 and ffmpeg from `/opt/homebrew/bin/ffmpeg`. A local fixture continuously redrew a
+full-window canvas and mutated/animated 240 DOM nodes for 120 seconds. RSS was sampled every
+500 ms across the real stdio MCP start/navigate/interact/stop tool sequence.
+
+| Measure | Initial defaults (quality 60, every 2nd frame) | Tuned defaults (quality 50, every 6th frame) |
+| --- | ---: | ---: |
+| Recorded/ffprobe duration | 120.20 s | 120.08 s |
+| Peak server RSS | 175.6 MiB | 134.7 MiB |
+| Peak process-tree RSS (server + Chrome + ffmpeg) | 1,063.5 MiB | 1,101.6 MiB |
+| Peak raw frames directory | 374.0 MiB (186.9 MiB/min) | 111.2 MiB (55.6 MiB/min) |
+| Assembled WebM | 179.6 MiB (89.7 MiB/min) | 77.8 MiB (38.9 MiB/min) |
+
+The initial raw-frame rate exceeded the approximately 100 MB/min tuning threshold, so the
+quality/frame-frequency defaults were reduced and remeasured. The tuned end-to-end peak is about
+1.08 GiB, below the 4 GiB sandbox limit; the 120-second default and 300-second hard cap are also
+well below the 30-minute run limit. These are deliberately busy-fixture measurements, not
+guarantees for every page.
+
+### Manual headed recording check (macOS)
+
+1. Ensure no `BROWSER_*` or `PUPPETEER_*` overrides are set, then run `deno task dev`. Chrome for
+   Testing should open headed.
+2. Connect an MCP client to that process, call `browser_new_tab()`, and browse to the page under
+   test with `browser_navigate`.
+3. Call `browser_start_recording({ "max_duration_s": 60 })`, then click/type/scroll through the
+   flow being verified.
+4. Call `browser_stop_recording()` and confirm it returns a `WebM path` rather than an MCP error.
+5. Validate the file with `ffprobe -v error -show_entries format=duration,size <webm-path>`, then
+   open the WebM in a compatible player and visually confirm the interaction is present.
+6. Stop `deno task dev` and confirm the headed Chrome process exits.
 
 Tip: prefer `browser_snapshot` over `browser_get_html` when locating elements. CSS selectors are brittle; the accessibility tree is semantic and much smaller.
 
