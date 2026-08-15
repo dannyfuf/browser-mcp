@@ -26,15 +26,44 @@ The server speaks MCP over stdio. It does **not** listen on a port — it expect
 To verify the wiring without an MCP client:
 
 ```sh
+deno task check
+deno task lint
 BROWSER_HEADLESS=1 deno task test
 ```
 
 ## Environment variables
 
-| Var                    | Default | Effect                                                                |
-| ---------------------- | ------- | --------------------------------------------------------------------- |
-| `BROWSER_HEADLESS`     | unset   | Set to `1` to run headless. Default is headed (you can watch the agent). |
-| `BROWSER_USER_DATA_DIR`| unset   | Path to a Chrome user data dir. Persists profile (cookies, localStorage) across runs. |
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `BROWSER_HEADLESS` | unset | Set to exactly `1` for headless Chrome. The default is headed. |
+| `BROWSER_USER_DATA_DIR` | unset | Chrome user-data directory; preserves cookies and local storage across runs. |
+| `BROWSER_NO_SANDBOX` | unset | Set to exactly `1` to append `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu`. Intended for sandbox/container images. |
+| `BROWSER_ARTIFACT_DIR` | OS temp + `browser-mcp-artifacts` | Parent directory for file screenshots and recording directories. Created lazily. |
+| `BROWSER_FFMPEG_PATH` | `ffmpeg` resolved from `PATH` | Explicit ffmpeg executable used to assemble recordings. Missing or invalid ffmpeg keeps recoverable JPEG frames instead of failing. |
+| `PUPPETEER_CACHE_DIR` | Puppeteer platform default | Chrome-for-Testing cache root. Honored when the server is launched with a stripped environment. |
+| `PUPPETEER_EXECUTABLE_PATH` | unset | Direct Chrome executable override. Honored when the server is launched with a stripped environment. |
+
+## Chrome provisioning contract
+
+The resolved Puppeteer release expects **Chrome for Testing 148.0.7778.97**. Provision that
+exact version in the runtime image rather than downloading a moving `latest` build:
+
+```sh
+PUPPETEER_CACHE_DIR=/tmp/pptr-cache \
+  deno run -A npm:@puppeteer/browsers install chrome@148.0.7778.97 --path /tmp/pptr-cache
+```
+
+Keep `PUPPETEER_CACHE_DIR=/tmp/pptr-cache` in the server environment, or set
+`PUPPETEER_EXECUTABLE_PATH` directly to the installed Chrome binary. Both resolution paths were
+verified by spawning the server with only `PATH`, `HOME`, `BROWSER_HEADLESS=1`, and the selected
+Puppeteer variable; no browser-specific passthrough is required in application code.
+
+On macOS arm64, the `@puppeteer/browsers` installer may exit successfully while leaving the
+downloaded app bundle incompletely extracted. If the binary is absent, re-extract the downloaded
+`148.0.7778.97-chrome-mac-arm64.zip` with `ditto -x -k` into the cache's
+`chrome/mac_arm-148.0.7778.97` directory. The resulting executable must report
+`Google Chrome for Testing 148.0.7778.97`. This issue was observed only in the local macOS
+provisioning check; the pinned image-build contract remains the command above.
 
 ## Tool reference
 
@@ -53,7 +82,7 @@ All tools take JSON args. Errors return as `isError: true` content blocks.
 - `browser_scroll({ selector?, x?, y?, behavior? })`
 
 **Inspection (the agent's eyes)**
-- `browser_screenshot({ selector?, fullPage? })` — returns PNG image content
+- `browser_screenshot({ selector?, fullPage?, output? })` — `output` is `inline` (default), `file`, or `both`; file output returns a PNG path under `BROWSER_ARTIFACT_DIR`
 - `browser_snapshot()` — accessibility tree with stable `ref` ids on interactive nodes; far cheaper to reason over than HTML
 - `browser_get_html({ selector?, maxLength? })` — outerHTML, truncated
 - `browser_get_text({ selector?, maxLength? })` — innerText, truncated
@@ -73,6 +102,32 @@ All tools take JSON args. Errors return as `isError: true` content blocks.
 - `browser_new_tab({ url? })`
 - `browser_switch_tab({ id })`
 - `browser_close_tab({ id? })`
+
+**Recording**
+- `browser_start_recording({ tab?, max_duration_s?, quality?, max_width? })` — starts a raw CDP screencast and returns its session id and frame directory
+- `browser_stop_recording()` — stops the current tab's recording and returns a WebM path, or a recoverable frames directory when assembly is skipped
+
+Recording defaults are 120 seconds, JPEG quality 60, maximum width 1280, and every second CDP
+frame; `max_duration_s` is capped at 300. Frames are written immediately as `frame-<n>.jpg`
+alongside monotonic timestamps in `frames.ndjson`, so frame bytes are never accumulated in memory.
+When ffmpeg succeeds, the JPEGs are deleted and the WebM byte size is returned. When ffmpeg is
+missing or assembly fails, the frames remain and the tool returns a note instead of an error.
+Normal tab and browser closes finalize active recordings. SIGINT/SIGTERM drains frame writes,
+skips ffmpeg, and leaves `recording.json` marked `unassembled` next to the recoverable frames.
+
+A typical tool sequence is:
+
+```text
+browser_start_recording({ "max_duration_s": 60 })
+browser_navigate({ "url": "http://127.0.0.1:3000" })
+browser_click({ "selector": "#sign-in" })
+browser_type({ "selector": "#email", "text": "demo@example.com" })
+browser_stop_recording()
+```
+
+Use the returned WebM path when assembly succeeds; otherwise retain or upload the returned frames
+directory. To exercise the same flow visibly on macOS, run `deno task dev` with no browser env
+vars, call the tools above from an MCP client, then open the returned WebM.
 
 Tip: prefer `browser_snapshot` over `browser_get_html` when locating elements. CSS selectors are brittle; the accessibility tree is semantic and much smaller.
 
@@ -109,7 +164,3 @@ After restarting Claude Code, ask it to call `ping` or `browser_navigate` — it
 **Browser process leaks after a crash.** `pkill -f 'Chrome for Testing'` is safe to run.
 
 **Dev loop.** Restart `deno task dev` after changing `src/`.
-
-## BYO Chrome (optional)
-
-If you don't want the included Chromium download, switch `puppeteer` for `puppeteer-core` and pass `executablePath` in `src/browser.ts`. Tracked as a follow-up in `plans/browser-mcp-server-2026-05-08-tracker.md`.
