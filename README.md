@@ -69,12 +69,97 @@ Keep `PUPPETEER_CACHE_DIR=/tmp/pptr-cache` in the server environment, or set
 verified by spawning the server with only `PATH`, `HOME`, `BROWSER_HEADLESS=1`, and the selected
 Puppeteer variable; no browser-specific passthrough is required in application code.
 
-On macOS arm64, the `@puppeteer/browsers` installer may exit successfully while leaving the
-downloaded app bundle incompletely extracted. If the binary is absent, re-extract the downloaded
+Under Deno, the `@puppeteer/browsers` installer may exit successfully while leaving the downloaded
+archive incompletely extracted. On macOS arm64, if the binary is absent, re-extract the downloaded
 `148.0.7778.97-chrome-mac-arm64.zip` with `ditto -x -k` into the cache's
 `chrome/mac_arm-148.0.7778.97` directory. The resulting executable must report
-`Google Chrome for Testing 148.0.7778.97`. This issue was observed only in the local macOS
-provisioning check; the pinned image-build contract remains the command above.
+`Google Chrome for Testing 148.0.7778.97`. The Linux Dockerfile below completes extraction with
+`unzip` and verifies the executable before deleting the archive.
+
+## Deno bundle smoke
+
+The reusable harness accepts any stdio MCP server command. It initializes the server, opens a tab,
+navigates to a local fixture, verifies a non-empty base64 PNG screenshot, and closes the tab:
+
+```sh
+BROWSER_HEADLESS=1 deno run -A smoke/harness.ts deno run -A dist/browser-mcp.js
+```
+
+The Linux proof uses Debian 13 from Deno's pinned image and the same harness:
+
+```sh
+docker build --platform=linux/amd64 -f Dockerfile.smoke -t browser-mcp-smoke .
+docker run --rm --platform=linux/amd64 browser-mcp-smoke
+```
+
+The exact direct apt package list discovered from successive Chrome launch errors is:
+
+```text
+libasound2t64
+libatk-bridge2.0-0t64
+libatk1.0-0t64
+libcairo2
+libcups2t64
+libexpat1
+libgbm1
+libglib2.0-0t64
+libnspr4
+libnss3
+libpango-1.0-0
+libxcomposite1
+libxdamage1
+libxfixes3
+libxkbcommon0
+libxrandr2
+```
+
+`unzip` is also installed as a provisioning utility. The committed `Dockerfile.smoke` is the
+canonical tested recipe:
+
+```dockerfile
+FROM denoland/deno:2.9.0
+
+USER root
+ENV PUPPETEER_CACHE_DIR=/tmp/pptr-cache
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libasound2t64 \
+    libatk-bridge2.0-0t64 \
+    libatk1.0-0t64 \
+    libcairo2 \
+    libcups2t64 \
+    libexpat1 \
+    libgbm1 \
+    libglib2.0-0t64 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    unzip \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN deno run -A npm:@puppeteer/browsers@2.13.2 install \
+  chrome@148.0.7778.97 --path /tmp/pptr-cache \
+  && unzip -q -o \
+    /tmp/pptr-cache/chrome/148.0.7778.97-chrome-linux64.zip \
+    -d /tmp/pptr-cache/chrome/linux-148.0.7778.97 \
+  && test -x /tmp/pptr-cache/chrome/linux-148.0.7778.97/chrome-linux64/chrome \
+  && rm /tmp/pptr-cache/chrome/148.0.7778.97-chrome-linux64.zip
+
+WORKDIR /app
+COPY dist/browser-mcp.js dist/browser-mcp.js
+COPY smoke/harness.ts smoke/harness.ts
+
+ENV BROWSER_HEADLESS=1
+ENV BROWSER_NO_SANDBOX=1
+
+CMD ["deno", "run", "-A", "smoke/harness.ts", "deno", "run", "-A", "dist/browser-mcp.js"]
+```
 
 ## Tool reference
 

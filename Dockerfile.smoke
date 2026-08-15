@@ -1,0 +1,42 @@
+FROM denoland/deno:2.9.0
+
+USER root
+ENV PUPPETEER_CACHE_DIR=/tmp/pptr-cache
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libasound2t64 \
+    libatk-bridge2.0-0t64 \
+    libatk1.0-0t64 \
+    libcairo2 \
+    libcups2t64 \
+    libexpat1 \
+    libgbm1 \
+    libglib2.0-0t64 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    unzip \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN deno run -A npm:@puppeteer/browsers@2.13.2 install \
+  chrome@148.0.7778.97 --path /tmp/pptr-cache \
+  && unzip -q -o \
+    /tmp/pptr-cache/chrome/148.0.7778.97-chrome-linux64.zip \
+    -d /tmp/pptr-cache/chrome/linux-148.0.7778.97 \
+  && test -x /tmp/pptr-cache/chrome/linux-148.0.7778.97/chrome-linux64/chrome \
+  && rm /tmp/pptr-cache/chrome/148.0.7778.97-chrome-linux64.zip
+
+WORKDIR /app
+COPY dist/browser-mcp.js dist/browser-mcp.js
+COPY smoke/harness.ts smoke/harness.ts
+
+ENV BROWSER_HEADLESS=1
+ENV BROWSER_NO_SANDBOX=1
+
+CMD ["deno", "run", "-A", "smoke/harness.ts", "deno", "run", "-A", "dist/browser-mcp.js"]
