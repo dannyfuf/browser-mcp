@@ -42,6 +42,10 @@ file with `deno run -A dist/browser-mcp.js`; it does not compile `src/` in the s
 change under `src/` must be followed by rebuilding and recommitting the bundle, then moving
 Franky's pinned repository ref to the new commit.
 
+The build leaves Cosmiconfig's optional `typescript` loader external so the production artifact
+does not vendor the compiler. The documented env-only configuration is self-contained; do not
+add a `puppeteer.config.ts` dependency to the vendored Franky runtime.
+
 ## Environment variables
 
 | Variable | Default | Effect |
