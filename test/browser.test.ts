@@ -1,4 +1,5 @@
-import { afterAll, expect, test } from 'bun:test';
+import { expect } from '@std/expect';
+import { afterAll, test } from '@std/testing/bdd';
 import { session } from '../src/browser.ts';
 
 afterAll(async () => {

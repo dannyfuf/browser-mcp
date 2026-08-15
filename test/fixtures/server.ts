@@ -6,13 +6,17 @@ const html = readFileSync(join(here, 'page.html'), 'utf8');
 
 export interface FixtureServer {
   url: string;
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
 export function startFixtureServer(): FixtureServer {
-  const server = Bun.serve({
-    port: 0,
-    fetch(req) {
+  const server = Deno.serve(
+    {
+      hostname: '127.0.0.1',
+      port: 0,
+      onListen: () => {},
+    },
+    (req) => {
       const url = new URL(req.url);
       if (url.pathname === '/' || url.pathname === '/index.html') {
         return new Response(html, { headers: { 'content-type': 'text/html' } });
@@ -24,9 +28,10 @@ export function startFixtureServer(): FixtureServer {
       }
       return new Response('not found', { status: 404 });
     },
-  });
+  );
+  const addr = server.addr as Deno.NetAddr;
   return {
-    url: `http://localhost:${server.port}`,
-    stop: () => server.stop(true),
+    url: `http://${addr.hostname}:${addr.port}`,
+    stop: () => server.shutdown(),
   };
 }

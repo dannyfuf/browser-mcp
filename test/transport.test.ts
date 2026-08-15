@@ -1,13 +1,14 @@
-import { expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect } from '@std/expect';
+import { test } from '@std/testing/bdd';
 
 // Confirms the MCP stdio transport is uncorrupted: stdout must be pure JSON-RPC,
 // every line parseable. Catches stray console.log regressions that the in-process
 // tests would miss.
 test('MCP stdio transport responds with parseable JSON-RPC', async () => {
-  const entry = resolve(import.meta.dir, '..', 'src', 'index.ts');
-  const proc = spawn('bun', ['run', entry], {
+  const entry = fileURLToPath(new URL('../src/index.ts', import.meta.url));
+  const proc = spawn('deno', ['run', '-A', entry], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, BROWSER_HEADLESS: '1' },
   });
@@ -55,4 +56,4 @@ test('MCP stdio transport responds with parseable JSON-RPC', async () => {
   expect(responses.find((r) => r.id === 2)).toBeDefined();
   const callResp = responses.find((r) => r.id === 3) as { result?: { content: unknown[] } };
   expect(callResp?.result?.content).toBeDefined();
-}, 30_000);
+});

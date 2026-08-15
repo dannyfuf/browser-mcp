@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { expect } from '@std/expect';
+import { afterAll, beforeAll, test } from '@std/testing/bdd';
 import { session } from '../src/browser.ts';
 import { type ToolDef, type ToolResult, tools } from '../src/tools/registry.ts';
 import { type FixtureServer, startFixtureServer } from './fixtures/server.ts';
@@ -14,7 +15,7 @@ beforeAll(() => {
 
 afterAll(async () => {
   await session.close();
-  fixture.stop();
+  await fixture.stop();
 });
 
 function getTool(name: string): ToolDef<any> {
