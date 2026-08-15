@@ -46,6 +46,7 @@ function pushRing<T>(buf: T[], item: T, cap: number = RING_CAP): void {
 class BrowserSession {
   private browser: Browser | null = null;
   private launching: Promise<Browser> | null = null;
+  // Stable CDP target ids are required here because Phase 2 attaches recording state to records.
   private tabs = new Map<string, TabRecord>();
   private currentTargetId: string | null = null;
   private nextId = 1;
@@ -67,23 +68,9 @@ class BrowserSession {
           this.tabs.clear();
           this.currentTargetId = null;
         });
-        b.on('targetdestroyed', (target) => {
-          // prune the registry when a tab closes externally (e.g. window.close())
-          const closed = target.type() === 'page';
-          if (!closed) return;
-          target.page().then((page) => {
-            if (!page) return;
-            for (const rec of this.tabs.values()) {
-              if (rec.page === page) {
-                this.tabs.delete(rec.targetId);
-                if (this.currentTargetId === rec.targetId) {
-                  const next = this.tabs.keys().next().value;
-                  this.currentTargetId = next ?? null;
-                }
-                break;
-              }
-            }
-          });
+        b.on('targetdestroyed', () => {
+          // Prune by stable target id; Page wrapper identity is not a lifecycle boundary.
+          this.pruneTabsAgainst(b);
         });
         return b;
       })
@@ -98,8 +85,7 @@ class BrowserSession {
     if (this.currentTargetId !== null) {
       const rec = this.tabs.get(this.currentTargetId);
       if (rec && !rec.page.isClosed()) return rec.page;
-      this.tabs.delete(this.currentTargetId);
-      this.currentTargetId = null;
+      this.removeTab(this.currentTargetId);
     }
     // Adopt the first existing page or open a new one.
     const pages = await browser.pages();
@@ -134,16 +120,17 @@ class BrowserSession {
     }
     const rec = this.requireTab(tabId);
     await rec.page.close().catch(() => undefined);
-    this.tabs.delete(rec.targetId);
-    if (this.currentTargetId === rec.targetId) {
-      const next = this.tabs.keys().next().value;
-      this.currentTargetId = next ?? null;
-    }
+    this.removeTab(rec.targetId);
     if (this.tabs.size === 0) {
       await this.close();
       return { closedId: tabId, browserShutdown: true };
     }
     return { closedId: tabId, browserShutdown: false };
+  }
+
+  async pruneTabs(): Promise<void> {
+    const browser = await this.ensureBrowser();
+    this.pruneTabsAgainst(browser);
   }
 
   listTabs(): TabInfo[] {
@@ -190,7 +177,7 @@ class BrowserSession {
     const rec = [...this.tabs.values()].find((candidate) => candidate.id === id);
     if (!rec) throw new Error(`tab ${id} not found`);
     if (rec.page.isClosed()) {
-      this.tabs.delete(rec.targetId);
+      this.removeTab(rec.targetId);
       throw new Error(`tab ${id} is already closed`);
     }
     return rec;
@@ -294,10 +281,29 @@ class BrowserSession {
   private currentRecord(): TabRecord | undefined {
     return this.currentTargetId === null ? undefined : this.tabs.get(this.currentTargetId);
   }
+
+  private pruneTabsAgainst(browser: Browser): void {
+    const liveTargetIds = new Set(browser.targets().map(browserTargetId));
+    for (const targetId of this.tabs.keys()) {
+      if (!liveTargetIds.has(targetId)) this.removeTab(targetId);
+    }
+  }
+
+  private removeTab(targetId: string): void {
+    this.tabs.delete(targetId);
+    if (this.currentTargetId === targetId) {
+      const next = this.tabs.keys().next().value;
+      this.currentTargetId = next ?? null;
+    }
+  }
 }
 
 function pageTargetId(page: Page): string {
-  return (page.target() as unknown as { _targetId: string })._targetId;
+  return browserTargetId(page.target());
+}
+
+function browserTargetId(target: unknown): string {
+  return (target as { _targetId: string })._targetId;
 }
 
 export const session = new BrowserSession();
