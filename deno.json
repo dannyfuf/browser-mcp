@@ -6,7 +6,7 @@
     "check": "deno check src/ test/",
     "lint": "deno run -A npm:@biomejs/biome check .",
     "test": "deno test -A test/",
-    "build": "deno eval 'console.error(\"Build placeholder: implemented in P1-T07\")'"
+    "build": "deno run -A npm:esbuild@0.28.2 src/index.ts --bundle --platform=node --format=esm --banner:js='import { createRequire } from \"node:module\"; const require = createRequire(import.meta.url);' --outfile=dist/browser-mcp.js"
   },
   "imports": {
     "@std/expect": "jsr:@std/expect@^1.0.20",

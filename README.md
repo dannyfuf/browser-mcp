@@ -31,6 +31,17 @@ deno task lint
 BROWSER_HEADLESS=1 deno task test
 ```
 
+## Build artifact
+
+```sh
+deno task build
+```
+
+This emits the committed, unminified ESM bundle at `dist/browser-mcp.js`. Franky runs that exact
+file with `deno run -A dist/browser-mcp.js`; it does not compile `src/` in the sandbox. Every
+change under `src/` must be followed by rebuilding and recommitting the bundle, then moving
+Franky's pinned repository ref to the new commit.
+
 ## Environment variables
 
 | Variable | Default | Effect |
