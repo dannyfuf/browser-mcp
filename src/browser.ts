@@ -1,4 +1,5 @@
 import puppeteer, { type Browser, type HTTPRequest, type HTTPResponse, type Page } from 'puppeteer';
+import { computeLaunchOptions } from './launch-args.ts';
 import { logger } from './logger.ts';
 
 export interface ConsoleEntry {
@@ -28,6 +29,7 @@ export interface TabInfo {
 
 interface TabRecord {
   id: number;
+  targetId: string;
   page: Page;
   console: ConsoleEntry[];
   network: NetworkEntry[];
@@ -44,31 +46,26 @@ function pushRing<T>(buf: T[], item: T, cap: number = RING_CAP): void {
 class BrowserSession {
   private browser: Browser | null = null;
   private launching: Promise<Browser> | null = null;
-  private tabs = new Map<number, TabRecord>();
-  private currentId: number | null = null;
+  private tabs = new Map<string, TabRecord>();
+  private currentTargetId: string | null = null;
   private nextId = 1;
   private shuttingDown = false;
 
   async ensureBrowser(): Promise<Browser> {
     if (this.browser?.connected) return this.browser;
     if (this.launching) return this.launching;
-    const headless = process.env.BROWSER_HEADLESS === '1';
-    const userDataDir = process.env.BROWSER_USER_DATA_DIR || undefined;
+    const launchOptions = computeLaunchOptions(process.env);
+    const { headless, userDataDir } = launchOptions;
     logger.info('launching browser', { headless, userDataDir: userDataDir ?? null });
     this.launching = puppeteer
-      .launch({
-        headless,
-        defaultViewport: { width: 1280, height: 800 },
-        userDataDir,
-        args: ['--no-first-run', '--no-default-browser-check'],
-      })
+      .launch(launchOptions)
       .then((b) => {
         this.browser = b;
         b.on('disconnected', () => {
           logger.warn('browser disconnected');
           this.browser = null;
           this.tabs.clear();
-          this.currentId = null;
+          this.currentTargetId = null;
         });
         b.on('targetdestroyed', (target) => {
           // prune the registry when a tab closes externally (e.g. window.close())
@@ -76,12 +73,12 @@ class BrowserSession {
           if (!closed) return;
           target.page().then((page) => {
             if (!page) return;
-            for (const [id, rec] of this.tabs) {
+            for (const rec of this.tabs.values()) {
               if (rec.page === page) {
-                this.tabs.delete(id);
-                if (this.currentId === id) {
+                this.tabs.delete(rec.targetId);
+                if (this.currentTargetId === rec.targetId) {
                   const next = this.tabs.keys().next().value;
-                  this.currentId = next ?? null;
+                  this.currentTargetId = next ?? null;
                 }
                 break;
               }
@@ -98,17 +95,17 @@ class BrowserSession {
 
   async getCurrentPage(): Promise<Page> {
     const browser = await this.ensureBrowser();
-    if (this.currentId !== null) {
-      const rec = this.tabs.get(this.currentId);
+    if (this.currentTargetId !== null) {
+      const rec = this.tabs.get(this.currentTargetId);
       if (rec && !rec.page.isClosed()) return rec.page;
-      this.tabs.delete(this.currentId);
-      this.currentId = null;
+      this.tabs.delete(this.currentTargetId);
+      this.currentTargetId = null;
     }
     // Adopt the first existing page or open a new one.
     const pages = await browser.pages();
     const page = pages[0] ?? (await browser.newPage());
     const rec = this.registerPage(page);
-    this.currentId = rec.id;
+    this.currentTargetId = rec.targetId;
     return page;
   }
 
@@ -116,7 +113,7 @@ class BrowserSession {
     const browser = await this.ensureBrowser();
     const page = await browser.newPage();
     const rec = this.registerPage(page);
-    this.currentId = rec.id;
+    this.currentTargetId = rec.targetId;
     if (url) {
       await page.goto(url, { waitUntil: 'load' });
     }
@@ -126,27 +123,27 @@ class BrowserSession {
   async switchTab(id: number): Promise<TabInfo> {
     const rec = this.requireTab(id);
     await rec.page.bringToFront().catch(() => undefined);
-    this.currentId = id;
+    this.currentTargetId = rec.targetId;
     return this.toTabInfo(rec);
   }
 
   async closeTab(id?: number): Promise<{ closedId: number; browserShutdown: boolean }> {
-    const targetId = id ?? this.currentId;
-    if (targetId === null || targetId === undefined) {
+    const tabId = id ?? this.currentRecord()?.id;
+    if (tabId === undefined) {
       throw new Error('no current tab to close');
     }
-    const rec = this.requireTab(targetId);
+    const rec = this.requireTab(tabId);
     await rec.page.close().catch(() => undefined);
-    this.tabs.delete(targetId);
-    if (this.currentId === targetId) {
+    this.tabs.delete(rec.targetId);
+    if (this.currentTargetId === rec.targetId) {
       const next = this.tabs.keys().next().value;
-      this.currentId = next ?? null;
+      this.currentTargetId = next ?? null;
     }
     if (this.tabs.size === 0) {
       await this.close();
-      return { closedId: targetId, browserShutdown: true };
+      return { closedId: tabId, browserShutdown: true };
     }
-    return { closedId: targetId, browserShutdown: false };
+    return { closedId: tabId, browserShutdown: false };
   }
 
   listTabs(): TabInfo[] {
@@ -154,22 +151,22 @@ class BrowserSession {
   }
 
   getConsoleBuffer(): ConsoleEntry[] {
-    const rec = this.currentId !== null ? this.tabs.get(this.currentId) : undefined;
+    const rec = this.currentRecord();
     return rec ? [...rec.console] : [];
   }
 
   clearConsoleBuffer(): void {
-    const rec = this.currentId !== null ? this.tabs.get(this.currentId) : undefined;
+    const rec = this.currentRecord();
     if (rec) rec.console.length = 0;
   }
 
   getNetworkBuffer(): NetworkEntry[] {
-    const rec = this.currentId !== null ? this.tabs.get(this.currentId) : undefined;
+    const rec = this.currentRecord();
     return rec ? [...rec.network] : [];
   }
 
   clearNetworkBuffer(): void {
-    const rec = this.currentId !== null ? this.tabs.get(this.currentId) : undefined;
+    const rec = this.currentRecord();
     if (rec) rec.network.length = 0;
   }
 
@@ -179,7 +176,7 @@ class BrowserSession {
     const browser = this.browser;
     this.browser = null;
     this.tabs.clear();
-    this.currentId = null;
+    this.currentTargetId = null;
     if (browser) {
       logger.info('closing browser');
       await browser.close().catch((err) => logger.warn('browser close error', String(err)));
@@ -190,27 +187,28 @@ class BrowserSession {
   // ---------- internals ----------
 
   private requireTab(id: number): TabRecord {
-    const rec = this.tabs.get(id);
+    const rec = [...this.tabs.values()].find((candidate) => candidate.id === id);
     if (!rec) throw new Error(`tab ${id} not found`);
     if (rec.page.isClosed()) {
-      this.tabs.delete(id);
+      this.tabs.delete(rec.targetId);
       throw new Error(`tab ${id} is already closed`);
     }
     return rec;
   }
 
   private registerPage(page: Page): TabRecord {
-    for (const existing of this.tabs.values()) {
-      if (existing.page === page) return existing;
-    }
+    const targetId = pageTargetId(page);
+    const existing = this.tabs.get(targetId);
+    if (existing) return existing;
     const rec: TabRecord = {
       id: this.nextId++,
+      targetId,
       page,
       console: [],
       network: [],
       pendingRequests: new Map(),
     };
-    this.tabs.set(rec.id, rec);
+    this.tabs.set(rec.targetId, rec);
     this.attachPageDiagnostics(rec);
     return rec;
   }
@@ -289,9 +287,17 @@ class BrowserSession {
       id: rec.id,
       url: rec.page.url(),
       title: '',
-      isCurrent: rec.id === this.currentId,
+      isCurrent: rec.targetId === this.currentTargetId,
     };
   }
+
+  private currentRecord(): TabRecord | undefined {
+    return this.currentTargetId === null ? undefined : this.tabs.get(this.currentTargetId);
+  }
+}
+
+function pageTargetId(page: Page): string {
+  return (page.target() as unknown as { _targetId: string })._targetId;
 }
 
 export const session = new BrowserSession();
