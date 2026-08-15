@@ -1,5 +1,7 @@
 import { Buffer } from 'node:buffer';
+import { writeFile } from 'node:fs/promises';
 import { z } from 'zod';
+import { artifactPath } from '../artifacts.ts';
 import { session } from '../browser.ts';
 import { jsonOk, type ToolDef, type ToolResult, tool } from './registry.ts';
 
@@ -14,13 +16,14 @@ function truncate(s: string, max: number): string {
 const screenshot = tool({
   name: 'browser_screenshot',
   description:
-    'Capture a PNG screenshot. With selector, screenshots that element. Without selector, viewport (or fullPage when true). Returned as MCP image content.',
+    'Capture a PNG screenshot. With selector, screenshots that element. Without selector, viewport (or fullPage when true). Output defaults to inline MCP image content; file writes to the artifact directory and returns its path; both returns both forms.',
   inputShape: {
     selector: z.string().optional(),
     fullPage: z.boolean().optional(),
     timeoutMs: z.number().int().positive().max(60_000).optional(),
+    output: z.enum(['inline', 'file', 'both']).optional(),
   },
-  handler: async ({ selector, fullPage, timeoutMs }): Promise<ToolResult> => {
+  handler: async ({ selector, fullPage, timeoutMs, output }): Promise<ToolResult> => {
     const page = await session.getCurrentPage();
     let buf: Uint8Array;
     if (selector) {
@@ -32,8 +35,18 @@ const screenshot = tool({
     } else {
       buf = (await page.screenshot({ type: 'png', fullPage: fullPage ?? false })) as Uint8Array;
     }
-    const data = Buffer.from(buf).toString('base64');
-    return { content: [{ type: 'image', data, mimeType: 'image/png' }] };
+
+    const content: ToolResult['content'] = [];
+    if (output !== 'file') {
+      const data = Buffer.from(buf).toString('base64');
+      content.push({ type: 'image', data, mimeType: 'image/png' });
+    }
+    if (output === 'file' || output === 'both') {
+      const path = artifactPath('screenshot', 'png');
+      await writeFile(path, buf);
+      content.push({ type: 'text', text: path });
+    }
+    return { content };
   },
 });
 
