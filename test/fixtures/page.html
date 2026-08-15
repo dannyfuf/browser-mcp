@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>fixture</title>
+  </head>
+  <body>
+    <h1 id="heading">Fixture page</h1>
+
+    <form id="login">
+      <label>
+        Name
+        <input id="name" name="name" type="text" />
+      </label>
+      <label>
+        Color
+        <select id="color" name="color">
+          <option value="red">Red</option>
+          <option value="green">Green</option>
+          <option value="blue">Blue</option>
+        </select>
+      </label>
+      <button id="submit" type="submit">Send</button>
+    </form>
+
+    <a id="other-link" href="/other">Other page</a>
+
+    <button id="fail-fetch" type="button">Trigger 404</button>
+    <p id="late" style="display: none">Appears later</p>
+
+    <script>
+      console.log('fixture-loaded');
+      console.error('expected-error');
+
+      document.getElementById('login').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = document.getElementById('name').value;
+        const color = document.getElementById('color').value;
+        const out = document.createElement('p');
+        out.id = 'submitted';
+        out.textContent = 'Submitted: ' + name + ' / ' + color;
+        document.body.appendChild(out);
+      });
+
+      document.getElementById('fail-fetch').addEventListener('click', () => {
+        fetch('/missing').catch(() => {});
+      });
+
+      setTimeout(() => {
+        document.getElementById('late').style.display = '';
+      }, 200);
+    </script>
+  </body>
+</html>
