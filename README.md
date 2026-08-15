@@ -4,13 +4,13 @@ A Model Context Protocol (MCP) server that lets an LLM agent (Claude Code, etc.)
 
 ## Requirements
 
-- [Bun](https://bun.sh) ≥ 1.3
+- [Deno](https://deno.com/) ≥ 2
 - macOS or Linux (Windows untested)
 
 ## Install
 
 ```sh
-bun install
+deno install
 ```
 
 Puppeteer downloads a Chromium build (~170 MB) on install. If you'd rather use a system Chrome, see "BYO Chrome" below.
@@ -18,7 +18,7 @@ Puppeteer downloads a Chromium build (~170 MB) on install. If you'd rather use a
 ## Run
 
 ```sh
-bun run start
+deno task dev
 ```
 
 The server speaks MCP over stdio. It does **not** listen on a port — it expects an MCP client to spawn it as a child process.
@@ -26,7 +26,7 @@ The server speaks MCP over stdio. It does **not** listen on a port — it expect
 To verify the wiring without an MCP client:
 
 ```sh
-bun test
+BROWSER_HEADLESS=1 deno task test
 ```
 
 ## Environment variables
@@ -79,7 +79,7 @@ Tip: prefer `browser_snapshot` over `browser_get_html` when locating elements. C
 ## Wire into Claude Code
 
 ```sh
-claude mcp add --scope user browser-mcp -- bun run /Users/danny/buk/browser/src/index.ts
+claude mcp add --scope user browser-mcp -- deno run -A /Users/danny/buk/browser/src/index.ts
 ```
 
 Or edit `~/.claude.json` directly:
@@ -88,8 +88,8 @@ Or edit `~/.claude.json` directly:
 {
   "mcpServers": {
     "browser-mcp": {
-      "command": "bun",
-      "args": ["run", "/Users/danny/buk/browser/src/index.ts"],
+      "command": "deno",
+      "args": ["run", "-A", "/Users/danny/buk/browser/src/index.ts"],
       "env": {
         "BROWSER_HEADLESS": "0"
       }
@@ -102,14 +102,14 @@ After restarting Claude Code, ask it to call `ping` or `browser_navigate` — it
 
 ## Troubleshooting
 
-**Chromium fails to launch on macOS.** Re-run `bunx puppeteer browsers install chrome`. If you're on Apple Silicon and getting an x64 binary, set `PUPPETEER_BROWSER_PLATFORM=mac_arm` and reinstall.
+**Chromium fails to launch on macOS.** Re-run `deno run -A npm:puppeteer browsers install chrome`. If you're on Apple Silicon and getting an x64 binary, set `PUPPETEER_BROWSER_PLATFORM=mac_arm` and reinstall.
 
 **Agent sees garbled output / MCP framing errors.** Something is writing to **stdout** instead of stderr. The project enforces this via Biome's `noConsole` rule (only `console.error/warn/info` are allowed). If you add a dependency that prints to stdout on import, you'll need to silence it.
 
 **Browser process leaks after a crash.** `pkill -f 'Chrome for Testing'` is safe to run.
 
-**Dev loop.** `bun run dev` watches `src/` and restarts on change.
+**Dev loop.** Restart `deno task dev` after changing `src/`.
 
 ## BYO Chrome (optional)
 
-If you don't want the bundled Chromium download, switch `puppeteer` for `puppeteer-core` and pass `executablePath` in `src/browser.ts`. Tracked as a follow-up in `plans/browser-mcp-server-2026-05-08-tracker.md`.
+If you don't want the included Chromium download, switch `puppeteer` for `puppeteer-core` and pass `executablePath` in `src/browser.ts`. Tracked as a follow-up in `plans/browser-mcp-server-2026-05-08-tracker.md`.

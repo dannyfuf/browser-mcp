@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { session } from '../browser.ts';
 import { jsonOk, type ToolDef, type ToolResult, tool } from './registry.ts';

@@ -1,0 +1,22 @@
+{
+  "lock": true,
+  "nodeModulesDir": "auto",
+  "tasks": {
+    "dev": "deno run -A src/index.ts",
+    "check": "deno check src/",
+    "lint": "deno run -A npm:@biomejs/biome check .",
+    "test": "deno test -A test/",
+    "build": "deno eval 'console.error(\"Build placeholder: implemented in P1-T07\")'"
+  },
+  "imports": {
+    "@std/expect": "jsr:@std/expect@^1.0.20",
+    "@std/testing": "jsr:@std/testing@^1.0.20"
+  },
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "deno.ns"],
+    "strict": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": false
+  },
+  "allowScripts": ["npm:puppeteer"]
+}
