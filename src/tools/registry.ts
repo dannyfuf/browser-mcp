@@ -40,6 +40,7 @@ import { inspectionTools } from './inspection.ts';
 import { interactionTools } from './interaction.ts';
 // Registered tools — populated by the tool group modules below.
 import { navigationTools } from './navigation.ts';
+import { performanceTools } from './performance.ts';
 import { recordingTools } from './recording.ts';
 import { stateTools } from './state.ts';
 import { tabsTools } from './tabs.ts';
@@ -60,4 +61,5 @@ export const tools: ToolDef<any>[] = [
   ...stateTools,
   ...tabsTools,
   ...recordingTools,
+  ...performanceTools,
 ];
