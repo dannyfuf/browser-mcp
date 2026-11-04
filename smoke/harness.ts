@@ -90,6 +90,9 @@ export async function runSmoke(
     const results: SmokeToolResult[] = [];
     results.push(await callTool({ name: 'browser_new_tab' }));
     results.push(await callTool({ name: 'browser_start_recording' }));
+    results.push(
+      await callTool({ name: 'browser_start_trace', arguments: { max_duration_s: 30 } }),
+    );
     results.push(await callTool({ name: 'browser_navigate', arguments: { url: fixture.url } }));
     results.push(await callTool({ name: 'browser_click', arguments: { selector: '#interact' } }));
     results.push(
@@ -104,6 +107,12 @@ export async function runSmoke(
     const recording = await callTool({ name: 'browser_stop_recording' });
     await assertRecordingArtifact(recording.result as ToolCallResult);
     results.push(recording);
+    const trace = await callTool({ name: 'browser_stop_trace' });
+    await assertTraceArtifact(trace.result as ToolCallResult);
+    results.push(trace);
+    const metrics = await callTool({ name: 'browser_performance_metrics' });
+    assertPerformanceMetrics(metrics.result as ToolCallResult);
+    results.push(metrics);
     const screenshot = await callTool({ name: 'browser_screenshot' });
     assertPng(screenshot.result as ToolCallResult);
     results.push(screenshot);
@@ -116,6 +125,34 @@ export async function runSmoke(
     await Promise.allSettled([stdoutDone, stderrDone]);
     if (temporaryArtifactDir) await rm(artifactDir, { recursive: true, force: true });
   }
+}
+
+async function assertTraceArtifact(result: ToolCallResult): Promise<void> {
+  const value = textJson<{ tracePath?: string; summary?: { durationMs?: number } }>(result);
+  if (!value.tracePath) throw new Error('browser_stop_trace returned no trace path');
+  const trace = await stat(value.tracePath);
+  if (!trace.isFile() || trace.size === 0) throw new Error('browser_stop_trace artifact was empty');
+  if (typeof value.summary?.durationMs !== 'number') {
+    throw new Error('browser_stop_trace returned no summary duration');
+  }
+}
+
+function assertPerformanceMetrics(result: ToolCallResult): void {
+  const value = textJson<{ cdp?: { JSHeapUsedSize?: number }; resources?: { count?: number } }>(
+    result,
+  );
+  if (typeof value.cdp?.JSHeapUsedSize !== 'number') {
+    throw new Error('browser_performance_metrics returned no JS heap metric');
+  }
+  if (typeof value.resources?.count !== 'number') {
+    throw new Error('browser_performance_metrics returned no resource count');
+  }
+}
+
+function textJson<T>(result: ToolCallResult): T {
+  const text = result.content?.find((content) => content.type === 'text')?.text;
+  if (!text) throw new Error('tool returned no text JSON');
+  return JSON.parse(text) as T;
 }
 
 async function main(): Promise<void> {

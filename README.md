@@ -52,11 +52,32 @@ add a `puppeteer.config.ts` dependency to the vendored Franky runtime.
 | --- | --- | --- |
 | `BROWSER_HEADLESS` | unset | Set to exactly `1` for headless Chrome. The default is headed. |
 | `BROWSER_USER_DATA_DIR` | unset | Chrome user-data directory; preserves cookies and local storage across runs. |
+| `BROWSER_STEALTH` | enabled | Stealth launch defaults are on. Set to exactly `0` to restore Puppeteer's automation defaults. |
+| `BROWSER_CHANNEL` | unset | Use an installed `chrome`, `chrome-beta`, `chrome-dev`, or `chrome-canary`. Invalid values are ignored. `PUPPETEER_EXECUTABLE_PATH` takes precedence. |
 | `BROWSER_NO_SANDBOX` | unset | Set to exactly `1` to append `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu`. Intended for sandbox/container images. |
 | `BROWSER_ARTIFACT_DIR` | OS temp + `browser-mcp-artifacts` | Parent directory for file screenshots and recording directories. Created lazily. |
 | `BROWSER_FFMPEG_PATH` | `ffmpeg` resolved from `PATH` | Explicit ffmpeg executable used to assemble recordings. Missing or invalid ffmpeg keeps recoverable JPEG frames instead of failing. |
 | `PUPPETEER_CACHE_DIR` | Puppeteer platform default | Chrome-for-Testing cache root. Honored when the server is launched with a stripped environment. |
 | `PUPPETEER_EXECUTABLE_PATH` | unset | Direct Chrome executable override. Honored when the server is launched with a stripped environment. |
+
+## Signing in to Google
+
+Use a headed browser and a persistent profile, then sign in by hand once in the MCP-controlled
+window. The profile keeps the authenticated session across server restarts:
+
+```sh
+BROWSER_USER_DATA_DIR="$PWD/.browser-profile" \
+  BROWSER_CHANNEL=chrome \
+  deno run -A dist/browser-mcp.js
+```
+
+`BROWSER_CHANNEL=chrome` is optional and uses a locally installed stable Google Chrome, which is
+often trusted more than Chrome for Testing. On systems without Google Chrome, an explicit Chromium
+binary is also supported; this machine has `/usr/bin/chromium`, so use
+`PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium`. A default throwaway profile loses the login at every
+launch. Google can still challenge or reject automated sessions, so a persistent profile plus a
+manual headed sign-in is the reliable path; the stealth defaults are not a guarantee that every
+challenge will be bypassed.
 
 ## Chrome provisioning contract
 
@@ -208,6 +229,39 @@ All tools take JSON args. Errors return as `isError: true` content blocks.
 **Recording**
 - `browser_start_recording({ tab?, max_duration_s?, quality?, max_width? })` — starts a raw CDP screencast and returns its session id and frame directory
 - `browser_stop_recording()` — stops the current tab's recording and returns a WebM path, or a recoverable frames directory when assembly is skipped
+
+**Performance**
+- `browser_start_trace({ tab?, screenshots?, categories?, max_duration_s? })` — starts a DevTools Performance trace; default cap 60s, maximum 300s
+- `browser_stop_trace({ top? })` — writes a DevTools-loadable trace and summarizes main-thread self time, long tasks, layout, shifts, and user timing
+- `browser_start_cpu_profile({ tab?, sampling_interval_us? })` — begins a sampling CPU profile for the selected/current tab
+- `browser_stop_cpu_profile({ top? })` — writes a `.cpuprofile` and reports hot functions and script URLs
+- `browser_performance_metrics({ tab? })` — snapshots CDP metrics, navigation/paint timing, supported Web Vitals, long animation frames, resources, and active emulation
+- `browser_emulate({ tab?, cpu_throttling_rate?, network?, disable_cache? })` — applies CPU/network/cache conditions; network is `none`, `offline`, `slow3g`, `fast3g`, `slow4g`, or `fast4g`
+- `browser_heap_snapshot({ tab?, collect_garbage? })` — streams a DevTools `.heapsnapshot` to disk; garbage collection defaults to true
+- `browser_start_coverage({ tab?, include_css? })` — starts JS and optional CSS coverage across navigation; CSS defaults to included
+- `browser_stop_coverage({ top? })` — writes full raw coverage and summarizes files with the most unused bytes
+
+### Investigating performance
+
+Start with a trace around the exact slow interaction, using the existing browser tools to reproduce
+it, then inspect the returned bounded summary. The trace file can be opened through Chrome DevTools
+→ Performance → Load profile:
+
+```text
+browser_emulate({ "cpu_throttling_rate": 4, "network": "fast3g", "disable_cache": true })
+browser_start_trace({ "screenshots": true, "max_duration_s": 60 })
+browser_navigate({ "url": "http://127.0.0.1:3000" })
+browser_click({ "selector": "#slow-action" })
+browser_stop_trace({ "top": 10 })
+browser_performance_metrics()
+browser_emulate({ "cpu_throttling_rate": 1, "network": "none", "disable_cache": false })
+```
+
+Throttling makes bottlenecks reproducible on fast development machines, and the metrics response
+records the effective settings. Use CPU profiling when the trace points to scripting but you need
+function-level attribution, coverage for unused bundle bytes, and a heap snapshot for retained
+memory. Active trace, CPU-profile, and coverage captures are finalized when their tab or browser is
+closed.
 
 Recording defaults are 120 seconds, JPEG quality 50, maximum width 1280, and every sixth CDP
 frame; `max_duration_s` is capped at 300. Frames are written immediately as `frame-<n>.jpg`

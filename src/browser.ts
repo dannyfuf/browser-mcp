@@ -1,6 +1,7 @@
 import puppeteer, { type Browser, type HTTPRequest, type HTTPResponse, type Page } from 'puppeteer';
 import { computeLaunchOptions } from './launch-args.ts';
 import { logger } from './logger.ts';
+import { finalizeAllPerformance, finalizePerformance } from './performance.ts';
 import { finalizeAllRecordings, finalizeRecording } from './recording.ts';
 
 export interface ConsoleEntry {
@@ -52,17 +53,23 @@ class BrowserSession {
   private currentTargetId: string | null = null;
   private nextId = 1;
   private closing: Promise<void> | null = null;
+  private headlessUserAgent: string | null = null;
+  private stealth = true;
 
   async ensureBrowser(): Promise<Browser> {
     if (this.browser?.connected) return this.browser;
     if (this.launching) return this.launching;
     const launchOptions = computeLaunchOptions(process.env);
     const { headless, userDataDir } = launchOptions;
+    this.stealth = process.env.BROWSER_STEALTH !== '0';
     logger.info('launching browser', { headless, userDataDir: userDataDir ?? null });
     this.launching = puppeteer
       .launch(launchOptions)
-      .then((b) => {
+      .then(async (b) => {
         this.browser = b;
+        this.headlessUserAgent = headless
+          ? (await b.userAgent()).replaceAll('HeadlessChrome', 'Chrome')
+          : null;
         b.on('disconnected', () => {
           logger.warn('browser disconnected');
           this.browser = null;
@@ -91,7 +98,7 @@ class BrowserSession {
     // Adopt the first existing page or open a new one.
     const pages = await browser.pages();
     const page = pages[0] ?? (await browser.newPage());
-    const rec = this.registerPage(page);
+    const rec = await this.registerPage(page);
     this.currentTargetId = rec.targetId;
     return page;
   }
@@ -99,7 +106,7 @@ class BrowserSession {
   async newTab(url?: string): Promise<TabInfo> {
     const browser = await this.ensureBrowser();
     const page = await browser.newPage();
-    const rec = this.registerPage(page);
+    const rec = await this.registerPage(page);
     this.currentTargetId = rec.targetId;
     if (url) {
       await page.goto(url, { waitUntil: 'load' });
@@ -120,13 +127,21 @@ class BrowserSession {
       throw new Error('no current tab to close');
     }
     const rec = this.requireTab(tabId);
-    await finalizeRecording(rec.targetId);
+    const finalizations = await Promise.allSettled([
+      finalizePerformance(rec.targetId),
+      finalizeRecording(rec.targetId),
+    ]);
     await rec.page.close().catch(() => undefined);
     this.removeTab(rec.targetId);
+    const failed = finalizations.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
     if (this.tabs.size === 0) {
       await this.close();
+      if (failed) throw failed.reason;
       return { closedId: tabId, browserShutdown: true };
     }
+    if (failed) throw failed.reason;
     return { closedId: tabId, browserShutdown: false };
   }
 
@@ -170,6 +185,12 @@ class BrowserSession {
   private async performClose(): Promise<void> {
     let recordingError: unknown;
     try {
+      await finalizeAllPerformance();
+    } catch (err) {
+      recordingError = err;
+      logger.error('performance capture finalization error', String(err));
+    }
+    try {
       await finalizeAllRecordings();
     } catch (err) {
       recordingError = err;
@@ -179,6 +200,7 @@ class BrowserSession {
     this.browser = null;
     this.tabs.clear();
     this.currentTargetId = null;
+    this.headlessUserAgent = null;
     if (browser) {
       logger.info('closing browser');
       await browser.close().catch((err) => logger.warn('browser close error', String(err)));
@@ -198,7 +220,7 @@ class BrowserSession {
     return rec;
   }
 
-  private registerPage(page: Page): TabRecord {
+  private async registerPage(page: Page): Promise<TabRecord> {
     const targetId = pageTargetId(page);
     const existing = this.tabs.get(targetId);
     if (existing) return existing;
@@ -211,8 +233,27 @@ class BrowserSession {
       pendingRequests: new Map(),
     };
     this.tabs.set(rec.targetId, rec);
+    await this.preparePage(page);
     this.attachPageDiagnostics(rec);
     return rec;
+  }
+
+  private async preparePage(page: Page): Promise<void> {
+    if (this.headlessUserAgent) await page.setUserAgent(this.headlessUserAgent);
+    if (!this.stealth) return;
+
+    const hideWebdriver = (): void => {
+      Object.defineProperty(navigator, 'webdriver', {
+        configurable: true,
+        get: () => false,
+      });
+    };
+    // AutomationControlled already reports false; patching navigator anyway adds an own
+    // property that bot checks detect, so only fall back when the flag did not take effect.
+    const webdriver = await page.evaluate(() => navigator.webdriver).catch(() => false);
+    if (webdriver === false) return;
+    await page.evaluateOnNewDocument(hideWebdriver);
+    await page.evaluate(hideWebdriver).catch(() => undefined);
   }
 
   private attachPageDiagnostics(rec: TabRecord): void {
@@ -332,6 +373,11 @@ export function attachShutdownHandlers(): void {
     if (shutdownStarted) return;
     shutdownStarted = true;
     logger.info(`shutdown signal: ${signal}`);
+    try {
+      await finalizeAllPerformance();
+    } catch (err) {
+      logger.error('performance shutdown error', String(err));
+    }
     try {
       await finalizeAllRecordings({ assemble: false });
     } catch (err) {

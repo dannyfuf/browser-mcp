@@ -26,6 +26,8 @@
     <a id="other-link" href="/other">Other page</a>
 
     <button id="fail-fetch" type="button">Trigger 404</button>
+    <button id="slow" type="button">Run slow handler</button>
+    <div id="layout-target">layout target</div>
     <p id="late" style="display: none">Appears later</p>
 
     <script>
@@ -44,6 +46,17 @@
 
       document.getElementById('fail-fetch').addEventListener('click', () => {
         fetch('/missing').catch(() => {});
+      });
+
+      document.getElementById('slow').addEventListener('click', function slowClickHandler() {
+        const target = document.getElementById('layout-target');
+        const deadline = performance.now() + 90;
+        let width = 100;
+        while (performance.now() < deadline) {
+          target.style.width = width++ % 200 + 'px';
+          target.getBoundingClientRect();
+        }
+        target.dataset.finished = 'true';
       });
 
       setTimeout(() => {
